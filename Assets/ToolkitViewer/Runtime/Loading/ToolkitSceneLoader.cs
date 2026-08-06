@@ -10,7 +10,7 @@ public class ToolkitSceneLoader : MonoBehaviour
     private const string SceneFileName = "scene.json";
 
     [Header("Scene Bundle")]
-    [Tooltip("Optional complete URL to a remote scene.json file. When set, this takes priority over the local folder.")]
+    [Tooltip("Optional complete URL to a remote scene.json file. The web page's ?scene= ID takes priority when present.")]
     public string remoteSceneUrl;
 
     [Tooltip("Local folder relative to StreamingAssets that contains scene.json and its images.")]
@@ -238,7 +238,16 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private string GetSceneJsonUrl()
     {
-        // A remote URL takes priority when supplied by the user or hosting page.
+        // A public viewer URL such as /viewer/?scene=abc loads the matching
+        // scene bundle from the same server and takes priority over Inspector settings.
+        string querySceneUrl = GetSceneUrlFromPageQuery();
+        if (!string.IsNullOrEmpty(querySceneUrl))
+        {
+            Debug.Log("Toolkit scene loader is using the scene ID from the page URL.");
+            return querySceneUrl;
+        }
+
+        // A complete remote URL is useful for editor tests and direct scene links.
         if (!string.IsNullOrWhiteSpace(remoteSceneUrl))
         {
             string trimmedRemoteUrl = remoteSceneUrl.Trim();
@@ -255,5 +264,76 @@ public class ToolkitSceneLoader : MonoBehaviour
 
         Debug.Log("Toolkit scene loader is using a local StreamingAssets bundle.");
         return ConvertPathToUrl(jsonPath);
+    }
+
+    private static string GetSceneUrlFromPageQuery()
+    {
+        if (string.IsNullOrWhiteSpace(Application.absoluteURL))
+        {
+            return null;
+        }
+
+        if (!Uri.TryCreate(Application.absoluteURL, UriKind.Absolute, out Uri pageUrl))
+        {
+            Debug.LogWarning("Could not parse the viewer page URL: " + Application.absoluteURL);
+            return null;
+        }
+
+        string sceneId = GetQueryParameter(pageUrl.Query, "scene");
+        if (string.IsNullOrEmpty(sceneId))
+        {
+            return null;
+        }
+
+        if (!IsSafeSceneId(sceneId))
+        {
+            Debug.LogError("The viewer page contains an invalid scene ID: " + sceneId);
+            return null;
+        }
+
+        string relativeScenePath = "/scenes/" + sceneId + "/" + SceneFileName;
+        return new Uri(pageUrl, relativeScenePath).AbsoluteUri;
+    }
+
+    private static string GetQueryParameter(string query, string requestedName)
+    {
+        string queryWithoutQuestionMark = query.TrimStart('?');
+        string[] parameters = queryWithoutQuestionMark.Split('&');
+
+        foreach (string parameter in parameters)
+        {
+            string[] nameAndValue = parameter.Split(new[] { '=' }, 2);
+            string name = Uri.UnescapeDataString(nameAndValue[0]);
+
+            if (name == requestedName && nameAndValue.Length == 2)
+            {
+                return Uri.UnescapeDataString(nameAndValue[1]);
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsSafeSceneId(string sceneId)
+    {
+        if (sceneId.Length == 0 || sceneId.Length > 64)
+        {
+            return false;
+        }
+
+        foreach (char character in sceneId)
+        {
+            bool isLetterOrNumber =
+                character >= 'a' && character <= 'z' ||
+                character >= 'A' && character <= 'Z' ||
+                character >= '0' && character <= '9';
+
+            if (!isLetterOrNumber && character != '-' && character != '_')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

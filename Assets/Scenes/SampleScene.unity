@@ -254,6 +254,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: 5160697368521971207, guid: befa39a0c58f8452393845ab57a76b2d, type: 3}
+      propertyPath: flying
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 6268353188953163629, guid: befa39a0c58f8452393845ab57a76b2d, type: 3}
       propertyPath: m_Name
       value: Player
@@ -332,9 +336,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: aa529de6231e5439680ada8ef31ee2d5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ToolkitSceneLoader
-  sceneFolder: ToolkitScenes/TestScene
-  sceneJsonFile: test_scene.json
+  remoteSceneUrl: https://share.communitygametoolkit.org/scenes/38a2dfb33e5340c4b9a4316e9ba58450/scene.json
+  sceneFolder: ToolkitScenes/TestSceneBundle
   loadOnStart: 1
+  player: {fileID: 0}
 --- !u!4 &704889065
 Transform:
   m_ObjectHideFlags: 0
