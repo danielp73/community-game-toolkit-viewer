@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.IO;
+using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.Networking;
 
@@ -24,6 +25,21 @@ public class ToolkitSceneLoader : MonoBehaviour
     public KeyboardMove player;
 
     private GameObject loadedSceneRoot;
+    private int failedImageCount;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+    [DllImport("__Internal")]
+    private static extern void ToolkitViewerSetStatus(string message, int current, int total);
+
+    [DllImport("__Internal")]
+    private static extern void ToolkitViewerSetTitle(string title);
+
+    [DllImport("__Internal")]
+    private static extern void ToolkitViewerShowReady(int failedImageCount);
+
+    [DllImport("__Internal")]
+    private static extern void ToolkitViewerShowError(string message, string details);
+#endif
 
     private void Awake()
     {
@@ -50,6 +66,7 @@ public class ToolkitSceneLoader : MonoBehaviour
     public void LoadScene()
     {
         Debug.Log("Starting Toolkit scene load.");
+        SetPageStatus("Loading scene…", 0, 0);
         StartCoroutine(LoadSceneCoroutine());
     }
 
@@ -57,6 +74,22 @@ public class ToolkitSceneLoader : MonoBehaviour
     {
         // Select either the remote URL or the local StreamingAssets bundle.
         string jsonUrl = GetSceneJsonUrl();
+
+        if (string.IsNullOrEmpty(jsonUrl))
+        {
+            ShowPageError(
+                "No scene was selected.",
+                "Open a scene from the gallery or add ?scene=SCENE_ID to the viewer URL."
+            );
+            EnablePlayer();
+            yield break;
+        }
+
+        // Give every remote load a unique query value. The visible viewer URL
+        // stays stable, while browsers and hosting proxies fetch fresh content.
+        string cacheToken = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        jsonUrl = AddCacheToken(jsonUrl, cacheToken);
+
         Debug.Log("Loading Toolkit scene JSON from: " + jsonUrl);
 
         // UnityWebRequest works with local file URLs and web URLs, including WebGL.
@@ -67,6 +100,10 @@ public class ToolkitSceneLoader : MonoBehaviour
             if (jsonRequest.result != UnityWebRequest.Result.Success)
             {
                 Debug.LogError("Could not load Toolkit scene JSON: " + jsonRequest.error);
+                ShowPageError(
+                    "This scene could not be found.",
+                    jsonRequest.error + " — " + jsonUrl
+                );
                 EnablePlayer();
                 yield break;
             }
@@ -78,6 +115,10 @@ public class ToolkitSceneLoader : MonoBehaviour
             if (sceneData == null)
             {
                 Debug.LogError("Toolkit scene JSON could not be parsed: " + jsonUrl);
+                ShowPageError(
+                    "This scene's data could not be read.",
+                    "Invalid scene JSON: " + jsonUrl
+                );
                 EnablePlayer();
                 yield break;
             }
@@ -86,6 +127,7 @@ public class ToolkitSceneLoader : MonoBehaviour
                 "Parsed Toolkit scene '" + sceneData.title +
                 "' (ID: " + sceneData.sceneId + ")."
             );
+            SetPageTitle(sceneData.title);
 
             // Apply the published movement values before enabling the player.
             ApplyPlayerSettings(sceneData.player);
@@ -99,21 +141,39 @@ public class ToolkitSceneLoader : MonoBehaviour
             // Keep all dynamically created scene objects under one root.
             loadedSceneRoot = new GameObject("Loaded Toolkit Scene - " + sceneData.title);
 
+            int imageCount = 0;
+            foreach (ToolkitObjectData objectData in sceneData.objects)
+            {
+                if (objectData.type == "image")
+                {
+                    imageCount++;
+                }
+            }
+
+            failedImageCount = 0;
+            int currentImage = 0;
+
             // Load supported objects one at a time for this initial implementation.
             foreach (ToolkitObjectData objectData in sceneData.objects)
             {
                 if (objectData.type != "image")
                 {
+                    Debug.LogWarning(
+                        "Viewer does not support object type '" + objectData.type + "'; skipping it."
+                    );
                     continue;
                 }
 
-                yield return LoadImageObject(jsonUrl, objectData);
+                currentImage++;
+                SetPageStatus("Loading images…", currentImage, imageCount);
+                yield return LoadImageObject(jsonUrl, objectData, cacheToken);
             }
 
             Debug.Log(
                 "Loaded Toolkit scene '" + sceneData.title +
                 "' with " + loadedSceneRoot.transform.childCount + " image(s)."
             );
+            ShowPageReady(failedImageCount);
         }
     }
 
@@ -146,10 +206,24 @@ public class ToolkitSceneLoader : MonoBehaviour
         player.transform.position = playerData.position;
         player.transform.rotation = Quaternion.Euler(playerData.rotation);
 
+        // The camera's vertical pitch is separate from the player root rotation.
+        MouseLookVertical verticalLook =
+            player.GetComponentInChildren<MouseLookVertical>(true);
+
+        if (verticalLook != null)
+        {
+            verticalLook.SetVerticalAngle(playerData.verticalLookAngle);
+        }
+        else
+        {
+            Debug.LogWarning("The viewer player has no MouseLookVertical component.");
+        }
+
         Debug.Log(
             "Applied Toolkit player settings. Flying: " + player.flying +
             ", Speed: " + player.speed +
-            ", Position: " + player.transform.position
+            ", Position: " + player.transform.position +
+            ", Vertical look: " + playerData.verticalLookAngle
         );
 
         // Enabling the component now lets KeyboardMove.Start use imported values.
@@ -177,10 +251,15 @@ public class ToolkitSceneLoader : MonoBehaviour
         }
     }
 
-    private IEnumerator LoadImageObject(string jsonUrl, ToolkitObjectData objectData)
+    private IEnumerator LoadImageObject(
+        string jsonUrl,
+        ToolkitObjectData objectData,
+        string cacheToken
+    )
     {
         // Resolve relative asset paths against the folder containing scene.json.
         string imageUrl = new Uri(new Uri(jsonUrl), objectData.assetUrl).AbsoluteUri;
+        imageUrl = AddCacheToken(imageUrl, cacheToken);
         Debug.Log(
             "Loading Toolkit image " + objectData.objectId + " from: " + imageUrl
         );
@@ -194,6 +273,7 @@ public class ToolkitSceneLoader : MonoBehaviour
                 Debug.LogError(
                     "Could not load image '" + objectData.assetUrl + "': " + imageRequest.error
                 );
+                failedImageCount++;
                 yield break;
             }
 
@@ -236,6 +316,23 @@ public class ToolkitSceneLoader : MonoBehaviour
         return new Uri(path).AbsoluteUri;
     }
 
+    private static string AddCacheToken(string url, string cacheToken)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri parsedUrl) ||
+            parsedUrl.Scheme != Uri.UriSchemeHttp && parsedUrl.Scheme != Uri.UriSchemeHttps)
+        {
+            return url;
+        }
+
+        UriBuilder builder = new UriBuilder(parsedUrl);
+        string existingQuery = builder.Query.TrimStart('?');
+        string cacheQuery = "v=" + Uri.EscapeDataString(cacheToken);
+        builder.Query = string.IsNullOrEmpty(existingQuery)
+            ? cacheQuery
+            : existingQuery + "&" + cacheQuery;
+        return builder.Uri.AbsoluteUri;
+    }
+
     private string GetSceneJsonUrl()
     {
         // A public viewer URL such as /viewer/?scene=abc loads the matching
@@ -255,6 +352,12 @@ public class ToolkitSceneLoader : MonoBehaviour
             return trimmedRemoteUrl;
         }
 
+        // The deployed viewer no longer includes a local test bundle.
+        if (Application.platform == RuntimePlatform.WebGLPlayer)
+        {
+            return null;
+        }
+
         // Otherwise, build a local path beneath StreamingAssets.
         string jsonPath = Path.Combine(
             Application.streamingAssetsPath,
@@ -264,6 +367,34 @@ public class ToolkitSceneLoader : MonoBehaviour
 
         Debug.Log("Toolkit scene loader is using a local StreamingAssets bundle.");
         return ConvertPathToUrl(jsonPath);
+    }
+
+    private static void SetPageStatus(string message, int current, int total)
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        ToolkitViewerSetStatus(message, current, total);
+#endif
+    }
+
+    private static void SetPageTitle(string title)
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        ToolkitViewerSetTitle(string.IsNullOrWhiteSpace(title) ? "Scene" : title);
+#endif
+    }
+
+    private static void ShowPageReady(int failures)
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        ToolkitViewerShowReady(failures);
+#endif
+    }
+
+    private static void ShowPageError(string message, string details)
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        ToolkitViewerShowError(message, details);
+#endif
     }
 
     private static string GetSceneUrlFromPageQuery()
