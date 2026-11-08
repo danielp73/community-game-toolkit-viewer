@@ -354,6 +354,8 @@ public class ToolkitSceneLoader : MonoBehaviour
             }
 
             BoxCollider imageCollider = imageObject.AddComponent<BoxCollider>();
+            // Keep a raycast target for editing without blocking the player.
+            imageCollider.isTrigger = true;
             imageCollider.size = new Vector3(
                 sprite.bounds.size.x,
                 sprite.bounds.size.y,

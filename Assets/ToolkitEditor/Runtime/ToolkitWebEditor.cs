@@ -54,9 +54,19 @@ public class ToolkitWebEditor : MonoBehaviour
     // scene loader. This will make later selection and saving logic easier to add.
     private GameObject uploadedImagesRoot;
     private ToolkitSceneAudio heldSound;
+    private ToolkitSceneAudio aimedSound;
+    private ToolkitSceneAudio ignoredPlacedSound;
+    private float heldSoundOriginalRadius;
     private bool heldSoundIsNew;
     private Vector3 heldSoundOriginalPosition;
     private bool soundChoiceVisible;
+#if UNITY_WEBGL && !UNITY_EDITOR
+    private bool sceneInteractionStarted;
+#else
+    private bool sceneInteractionStarted = true;
+#endif
+    private bool waitingForStartRelease;
+    private int ignoreSceneInputThroughFrame = -1;
     private bool soundChoicePlayerEnabled, soundChoiceHorizontalEnabled, soundChoiceVerticalEnabled;
     private ToolkitEditableImage aimedImage;
     private ToolkitEditableImage heldImage;
@@ -142,12 +152,33 @@ public class ToolkitWebEditor : MonoBehaviour
         }
     }
 
+    [Preserve]
+    public void StartSceneInteraction()
+    {
+        sceneInteractionStarted = true;
+        waitingForStartRelease = true;
+        ignoreSceneInputThroughFrame = Time.frameCount + 1;
+        SetSoundChoiceVisible("0");
+    }
+
+    private bool CanInteractWithScene()
+    {
+        if (!sceneInteractionStarted || Time.frameCount <= ignoreSceneInputThroughFrame) return false;
+        if (waitingForStartRelease) {
+            if (Mouse.current != null && (Mouse.current.leftButton.isPressed ||
+                Mouse.current.leftButton.wasPressedThisFrame || Mouse.current.leftButton.wasReleasedThisFrame)) return false;
+            waitingForStartRelease = false;
+        }
+        return true;
+    }
+
     private void Update()
     {
-        if (soundChoiceVisible) return;
+        if (!CanInteractWithScene() || soundChoiceVisible) return;
         TrackPlayerChanges();
         if (heldSound != null) {
-            SetComposePrompt("WASD — Move · Mouse — Look · Click — Place sound · Esc — Cancel");
+            ResizeHeldSoundRadius();
+            SetComposePrompt("Click — Place sound · [ / ] — Resize sound area · Delete — Remove · Esc — Cancel");
             if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame) CancelHeldSound();
             return;
         }
@@ -162,7 +193,7 @@ public class ToolkitWebEditor : MonoBehaviour
         {
             ScaleHeldImage();
             SetComposePrompt(
-                "Click — Place   ·   [ & ] to Scale   ·   R — Rotate   ·   Esc — Cancel"
+                "Click — Place   ·   [ & ] to Scale   ·   R — Rotate   ·   Delete — Remove   ·   Esc — Cancel"
             );
 
             if (Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame)
@@ -212,7 +243,19 @@ public class ToolkitWebEditor : MonoBehaviour
             }
         }
 
-        SetComposePrompt(FindAimedSound() != null ? "Click — Move sound" : aimedImage != null ? "Click — Pick up image" : "");
+        ToolkitSceneAudio nextSound = FindAimedSound();
+        if (ignoredPlacedSound != null) {
+            if (nextSound == ignoredPlacedSound) nextSound = null;
+            else ignoredPlacedSound = null;
+        }
+        if (nextSound != aimedSound) {
+            if (aimedSound != null) aimedSound.SetHighlighted(false);
+            aimedSound = nextSound;
+            if (aimedSound != null) aimedSound.SetHighlighted(true);
+        }
+        SetComposePrompt(aimedSound != null ? "Click — Move " +
+            (string.IsNullOrWhiteSpace(aimedSound.settings.displayName) ? "sound" : aimedSound.settings.displayName) + " · Delete — Remove" :
+            aimedImage != null ? "Click — Pick up image · Delete — Remove" : "");
 
         if (aimedImage != null && Mouse.current != null &&
             Mouse.current.leftButton.wasPressedThisFrame)
@@ -334,6 +377,11 @@ public class ToolkitWebEditor : MonoBehaviour
         if (heldImage != null) CancelHeldImage();
         heldSound = sound; heldSoundIsNew = isNew;
         heldSoundOriginalPosition = sound.transform.position;
+        heldSoundOriginalRadius = sound.settings.radius;
+        if (aimedSound != null && aimedSound != sound) aimedSound.SetHighlighted(false);
+        aimedSound = null; ignoredPlacedSound = null;
+        if (aimedImage != null) { aimedImage.SetHighlighted(false); aimedImage = null; }
+        sound.SetHighlighted(true);
         sound.pendingPlacement = true;
         sound.transform.position = AudioPlacementPosition();
     }
@@ -341,23 +389,25 @@ public class ToolkitWebEditor : MonoBehaviour
     [Preserve]
     public void HandleSceneAudioClick()
     {
-        if (soundChoiceVisible || rotationMode || heldImage != null) return;
+        if (!CanInteractWithScene() || soundChoiceVisible || rotationMode || heldImage != null) return;
         if (heldSound != null) {
             heldSound.transform.position = AudioPlacementPosition();
             heldSound.pendingPlacement = false;
+            heldSound.SetHighlighted(false);
+            ignoredPlacedSound = heldSound;
             heldSound = null;
             SetComposePrompt(""); NotifySceneChanged();
             return;
         }
         ToolkitSceneAudio aimed = FindAimedSound();
-        if (aimed != null) BeginHoldingSound(aimed, false);
+        if (aimed != null && aimed != ignoredPlacedSound) BeginHoldingSound(aimed, false);
     }
 
     private ToolkitSceneAudio FindAimedSound()
     {
         Camera view = GetPlacementCamera();
         if (view == null) return null;
-        RaycastHit[] hits = Physics.RaycastAll(view.transform.position, view.transform.forward, 20f);
+        RaycastHit[] hits = Physics.RaycastAll(view.transform.position, view.transform.forward, 20f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide);
         Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
         foreach (RaycastHit hit in hits) {
             ToolkitSceneAudio sound = hit.collider.GetComponentInParent<ToolkitSceneAudio>();
@@ -367,21 +417,66 @@ public class ToolkitWebEditor : MonoBehaviour
         return null;
     }
 
+    private void ResizeHeldSoundRadius()
+    {
+        if (heldSound == null || Keyboard.current == null) return;
+        float step = 0f;
+        if (Keyboard.current.leftBracketKey.wasPressedThisFrame) step = -0.5f;
+        else if (Keyboard.current.rightBracketKey.wasPressedThisFrame) step = 0.5f;
+        if (step != 0f) heldSound.settings.radius = Mathf.Clamp(heldSound.settings.radius + step, 0.5f, 100f);
+    }
+
     private void CancelHeldSound()
     {
         if (heldSoundIsNew) Destroy(heldSound.gameObject);
-        else { heldSound.transform.position = heldSoundOriginalPosition; heldSound.pendingPlacement = false; }
+        else {
+            heldSound.transform.position = heldSoundOriginalPosition;
+            heldSound.settings.radius = heldSoundOriginalRadius;
+            heldSound.pendingPlacement = false; heldSound.SetHighlighted(false);
+            ignoredPlacedSound = heldSound;
+        }
         heldSound = null; SetComposePrompt("");
+    }
+
+    [Preserve]
+    public void DeleteSelectedObject()
+    {
+        if (!CanInteractWithScene() || soundChoiceVisible) return;
+        // A carried object takes priority over anything behind the reticle.
+        if (heldSound != null) { RemoveSceneAudio(heldSound.objectId); return; }
+        ToolkitEditableImage image = heldImage != null ? heldImage : aimedImage;
+        if (heldImage == null && aimedSound != null) { RemoveSceneAudio(aimedSound.objectId); return; }
+        if (image == null) return;
+        if (rotationMode) ExitRotationMode();
+        if (heldImage == image) heldImage = null;
+        if (aimedImage == image) aimedImage = null;
+        if (ignoredPlacedImage == image) ignoredPlacedImage = null;
+        RemoveSceneObject(image.gameObject);
     }
 
     [Preserve]
     public void RemoveSceneAudio(string id)
     {
-        foreach (ToolkitSceneAudio sound in FindObjectsByType<ToolkitSceneAudio>(FindObjectsSortMode.None))
-            if (sound.objectId == id) { Destroy(sound.gameObject); StartCoroutine(NotifyAudioRemoved()); break; }
+        foreach (ToolkitSceneAudio sound in FindObjectsByType<ToolkitSceneAudio>(FindObjectsSortMode.None)) {
+            if (sound.objectId != id) continue;
+            if (heldSound == sound) heldSound = null;
+            if (aimedSound == sound) aimedSound = null;
+            if (ignoredPlacedSound == sound) ignoredPlacedSound = null;
+            RemoveSceneObject(sound.gameObject);
+            break;
+        }
     }
 
-    private IEnumerator NotifyAudioRemoved()
+    private void RemoveSceneObject(GameObject target)
+    {
+        // Exclude it from saving immediately, before deferred destruction runs.
+        target.SetActive(false);
+        Destroy(target);
+        SetComposePrompt("");
+        StartCoroutine(NotifyObjectRemoved());
+    }
+
+    private IEnumerator NotifyObjectRemoved()
     {
         yield return null;
         NotifySceneChanged();
@@ -460,9 +555,14 @@ public class ToolkitWebEditor : MonoBehaviour
             if (sound == heldSound && heldSoundIsNew) continue;
             string extension = System.IO.Path.GetExtension(new Uri(sound.sourceUrl).AbsolutePath);
             string fileName = "sound-" + sound.objectId + extension;
+            ToolkitAudioSettings savedAudio = sound.settings;
+            if (sound == heldSound) {
+                savedAudio = JsonUtility.FromJson<ToolkitAudioSettings>(JsonUtility.ToJson(sound.settings));
+                savedAudio.radius = heldSoundOriginalRadius;
+            }
             sceneData.objects.Add(new ToolkitObjectData {
                 objectId = sound.objectId, type = "audio", assetUrl = "audio/" + fileName,
-                audio = sound.settings,
+                audio = savedAudio,
                 transform = new ToolkitTransformData { position = sound == heldSound ? heldSoundOriginalPosition : sound.transform.position, rotation = Vector3.zero, scale = Vector3.one }
             });
             payload.audio.Add(new SaveImageSource { fileName = fileName, sourceUrl = sound.sourceUrl });
@@ -565,6 +665,8 @@ public class ToolkitWebEditor : MonoBehaviour
             // Build a 1.5-unit rectangle while preserving the image proportions.
             meshFilter.mesh = CreateImageMesh(texture.width, texture.height);
             BoxCollider imageCollider = imageObject.AddComponent<BoxCollider>();
+            // Keep a raycast target for editing without blocking the player.
+            imageCollider.isTrigger = true;
             imageCollider.size = new Vector3(
                 meshFilter.mesh.bounds.size.x,
                 meshFilter.mesh.bounds.size.y,
@@ -702,7 +804,7 @@ public class ToolkitWebEditor : MonoBehaviour
         RaycastHit[] hits = Physics.RaycastAll(
             viewCamera.transform.position,
             viewCamera.transform.forward,
-            20f
+            20f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide
         );
         Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
 

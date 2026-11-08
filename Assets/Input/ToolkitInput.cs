@@ -29,6 +29,8 @@ public class ToolkitInput : MonoBehaviour
     }
 
     public Vector2 Move => move.ReadValue<Vector2>();
+    public float Elevation => Keyboard.current == null ? 0f :
+        (Keyboard.current.qKey.isPressed ? 1f : 0f) - (Keyboard.current.eKey.isPressed ? 1f : 0f);
     public Vector2 Look => look.ReadValue<Vector2>();
     public bool JumpPressed => jump.WasPressedThisFrame();
 }

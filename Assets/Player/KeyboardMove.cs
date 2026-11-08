@@ -75,7 +75,9 @@ public class KeyboardMove : MonoBehaviour
             _vertSpeed += gravity * Time.deltaTime;
         }
 
-        movement.y = _vertSpeed;
+        // Q/E move vertically in world space, independent of camera pitch.
+        float elevation = input.Elevation;
+        movement.y = elevation != 0f ? elevation * speed : _vertSpeed;
 
         movement *= Time.deltaTime;
         movement = transform.TransformDirection(movement);
