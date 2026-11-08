@@ -24,5 +24,35 @@ mergeInto(LibraryManager.library, {
         UTF8ToString(detailsPointer)
       );
     }
+  },
+
+  ToolkitEditorImageAdded: function (filenamePointer) {
+    if (window.toolkitEditorImageAdded) {
+      window.toolkitEditorImageAdded(UTF8ToString(filenamePointer));
+    }
+  },
+
+  ToolkitEditorSetComposePrompt: function (messagePointer) {
+    if (window.toolkitEditorSetComposePrompt) {
+      window.toolkitEditorSetComposePrompt(UTF8ToString(messagePointer));
+    }
+  },
+
+  ToolkitEditorSavePayload: function (payloadPointer) {
+    if (window.toolkitEditorSavePayload) {
+      window.toolkitEditorSavePayload(UTF8ToString(payloadPointer));
+    }
+  },
+
+  ToolkitEditorSceneChanged: function () {
+    if (window.toolkitEditorSceneChanged) {
+      window.toolkitEditorSceneChanged();
+    }
+  },
+
+  ToolkitEditorSetRotationMode: function (active) {
+    if (window.toolkitEditorSetRotationMode) {
+      window.toolkitEditorSetRotationMode(active !== 0);
+    }
   }
 });

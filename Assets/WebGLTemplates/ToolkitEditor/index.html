@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>{{{ PRODUCT_NAME }}}</title>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #unity-canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      background: #000;
+      outline: none;
+    }
+
+    body.rotation-mode #unity-canvas,
+    body.rotation-mode {
+      cursor: default !important;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 16px;
+      color: #fff;
+      font: 15px/1.5 system-ui, sans-serif;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #overlay[hidden], #controls[hidden], #error-details[hidden], #media-qr[hidden] {
+      display: none;
+    }
+
+    .overlay-content {
+      width: min(360px, 88vw);
+      padding: 10px 16px 12px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(8px);
+    }
+
+    #scene-title {
+      margin: 0 0 8px;
+      font-size: 0.95rem;
+    }
+
+    #loading-track {
+      height: 2px;
+      margin: 18px 0 10px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    #loading-progress {
+      width: 0;
+      height: 100%;
+      background: #fff;
+    }
+
+    #status, #image-progress, #error-details {
+      margin: 7px 0 0;
+      color: rgba(255, 255, 255, 0.72);
+    }
+
+    #error-actions {
+      display: none;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 20px;
+    }
+
+    #overlay.is-error #loading-track, #overlay.is-error #image-progress {
+      display: none;
+    }
+
+    #overlay.is-error #error-actions {
+      display: flex;
+    }
+
+    #overlay.is-error {
+      align-items: center;
+      background: rgba(0, 0, 0, 0.78);
+      pointer-events: auto;
+    }
+
+    #overlay.is-error .overlay-content {
+      padding: 24px;
+    }
+
+    #error-actions button, #error-actions a {
+      padding: 9px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      border-radius: 999px;
+      background: transparent;
+      color: #fff;
+      font: inherit;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    #controls {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      padding: 9px 14px;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.68);
+      color: #fff;
+      font: 13px/1.4 system-ui, sans-serif;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    #unity-warning {
+      position: fixed;
+      z-index: 1;
+      top: 0;
+      left: 50%;
+      max-width: min(720px, 90vw);
+      transform: translateX(-50%);
+      font: 14px/1.4 sans-serif;
+    }
+
+    #add-media {
+      position: fixed;
+      z-index: 2;
+      top: 16px;
+      right: 16px;
+      width: 148px;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      border-radius: 14px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      font: 14px/1.3 system-ui, sans-serif;
+      text-align: center;
+      backdrop-filter: blur(8px);
+    }
+
+    #add-media h2 {
+      margin: 0 0 9px;
+      font-size: 16px;
+    }
+
+    #media-qr {
+      display: block;
+      width: 124px;
+      height: 124px;
+      margin: 0 auto 8px;
+      border-radius: 7px;
+      background: #fff;
+    }
+
+    #media-status {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 12px;
+    }
+
+    #reticle {
+      position: fixed;
+      z-index: 2;
+      top: 50%;
+      left: 50%;
+      width: 5px;
+      height: 5px;
+      transform: translate(-50%, -50%);
+      border: 1px solid rgba(255, 255, 255, 0.9);
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+    }
+
+    #compose-prompt {
+      position: fixed;
+      z-index: 2;
+      left: 50%;
+      bottom: 54px;
+      min-height: 18px;
+      padding: 7px 12px;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      font: 600 13px/1.3 system-ui, sans-serif;
+      pointer-events: none;
+    }
+
+    #save-panel {
+      position: fixed;
+      z-index: 2;
+      top: 16px;
+      left: 16px;
+      display: grid;
+      gap: 6px;
+      padding: 9px 13px;
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      border-radius: 13px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      text-align: center;
+      backdrop-filter: blur(8px);
+    }
+
+    #save-scene {
+      padding: 9px 13px;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+      font: 600 13px/1.2 system-ui, sans-serif;
+      cursor: pointer;
+    }
+
+    #quit-hint {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.72);
+      font: 12px/1.2 system-ui, sans-serif;
+    }
+
+    #rotation-controls {
+      position: fixed;
+      z-index: 4;
+      left: 50%;
+      bottom: 28px;
+      display: flex;
+      gap: 8px;
+      padding: 10px;
+      transform: translateX(-50%);
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      border-radius: 14px;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(8px);
+    }
+
+    #rotation-controls[hidden] {
+      display: none;
+    }
+
+    #rotation-controls button {
+      min-height: 40px;
+      padding: 8px 13px;
+      border: 0;
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.16);
+      color: #fff;
+      font: 600 13px/1.2 system-ui, sans-serif;
+      cursor: pointer;
+    }
+
+    #rotation-controls .rotation-done {
+      background: #2563eb;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="unity-canvas" tabindex="-1"></canvas>
+  <aside id="save-panel" aria-label="Scene saving">
+    <button type="button" id="save-scene">Save Scene · Ctrl+S</button>
+    <p id="quit-hint">Press Q to Quit</p>
+  </aside>
+  <div id="rotation-controls" hidden>
+    <button type="button" id="rotation-face">Face Camera</button>
+    <button type="button" id="rotation-cancel">Cancel</button>
+    <button type="button" id="rotation-done" class="rotation-done">Done</button>
+  </div>
+  <div id="reticle" aria-hidden="true"></div>
+  <div id="compose-prompt" hidden></div>
+  <aside id="add-media" aria-label="Add media">
+    <h2>Add Media With Phone</h2>
+    <img id="media-qr" alt="Scan to add media" hidden>
+    <p id="media-status">Preparing upload…</p>
+  </aside>
+  <div id="overlay">
+    <div class="overlay-content">
+      <h1 id="scene-title">Community Game Development Toolkit</h1>
+      <p id="status">Loading viewer…</p>
+      <div id="loading-track"><div id="loading-progress"></div></div>
+      <p id="image-progress"></p>
+      <p id="error-details" hidden></p>
+      <div id="error-actions">
+        <button type="button" id="retry">Try again</button>
+        <a href="/">Back to scenes</a>
+      </div>
+    </div>
+  </div>
+  <div id="controls" hidden>Click to begin · WASD to move · Mouse to look</div>
+  <div id="unity-warning"></div>
+
+  <script>
+    const canvas = document.querySelector("#unity-canvas");
+    const overlay = document.querySelector("#overlay");
+    const loadingProgress = document.querySelector("#loading-progress");
+    const sceneTitle = document.querySelector("#scene-title");
+    const status = document.querySelector("#status");
+    const imageProgress = document.querySelector("#image-progress");
+    const errorDetails = document.querySelector("#error-details");
+    const controls = document.querySelector("#controls");
+    const warningBanner = document.querySelector("#unity-warning");
+    const mediaQr = document.querySelector("#media-qr");
+    const mediaStatus = document.querySelector("#media-status");
+    const composePrompt = document.querySelector("#compose-prompt");
+    const saveSceneButton = document.querySelector("#save-scene");
+    const rotationControls = document.querySelector("#rotation-controls");
+    let unityInstance = null;
+    let activeSessionId = null;
+    let mediaSessionUrl = null;
+    let sceneSaveInProgress = false;
+    let savedSceneCode = null;
+    let autosaveTimer = null;
+    let autosavePending = false;
+    let sessionPollTimer = null;
+    const importedUploads = new Set();
+
+    const openedSceneCode = new URLSearchParams(window.location.search).get("scene")?.trim();
+    if (openedSceneCode && /^[A-Za-z0-9_-]{1,64}$/.test(openedSceneCode)) {
+      savedSceneCode = openedSceneCode;
+      saveSceneButton.textContent = `Saved as: ${savedSceneCode}`;
+    }
+
+    document.querySelector("#retry").onclick = () => location.reload();
+
+    window.toolkitEditorImageAdded = filename => {
+      showBanner(`Added ${filename} to the scene.`, "success");
+      canvas.focus();
+    };
+
+    window.toolkitEditorSetComposePrompt = message => {
+      composePrompt.textContent = message;
+      composePrompt.hidden = !message;
+    };
+
+    window.toolkitEditorSetRotationMode = active => {
+      rotationControls.hidden = !active;
+      document.body.classList.toggle("rotation-mode", active);
+      if (active) {
+        document.exitPointerLock?.();
+      }
+    };
+
+    document.querySelector("#rotation-face").onclick = () => {
+      unityInstance?.SendMessage("ToolkitWebEditor", "FaceHeldImageToCamera");
+    };
+
+    document.querySelector("#rotation-cancel").onclick = () => {
+      unityInstance?.SendMessage("ToolkitWebEditor", "CancelRotation");
+      canvas.requestPointerLock?.();
+      canvas.focus();
+    };
+
+    document.querySelector("#rotation-done").onclick = () => {
+      unityInstance?.SendMessage("ToolkitWebEditor", "FinishRotationAndPlace");
+      canvas.requestPointerLock?.();
+      canvas.focus();
+    };
+
+    async function prepareMediaSession() {
+      try {
+        const response = await fetch("/create-session", { method: "POST" });
+        if (!response.ok) {
+          throw new Error(`Session request failed (${response.status}).`);
+        }
+
+        const session = await response.json();
+        if (!session.sessionId) {
+          throw new Error("The server did not return a session ID.");
+        }
+
+        activeSessionId = session.sessionId;
+        startSessionPolling(activeSessionId);
+        const localSessionUrl = `/session/${encodeURIComponent(session.sessionId)}`;
+        mediaSessionUrl = localSessionUrl;
+        mediaQr.src = `${localSessionUrl}/qr`;
+        mediaQr.hidden = false;
+        mediaStatus.textContent = "Press Enter to add media from browser";
+      } catch (error) {
+        mediaStatus.textContent = "Upload unavailable";
+        showBanner("The media upload session could not be started.", "error");
+        console.error(error);
+      }
+    }
+
+    prepareMediaSession();
+
+    async function requestSceneSave() {
+      if (!unityInstance || sceneSaveInProgress) {
+        return;
+      }
+
+      if (savedSceneCode) {
+        beginSceneSave(savedSceneCode);
+        return;
+      }
+
+      document.exitPointerLock?.();
+      const code = window.prompt(
+        "Enter a scene code. Saving again with the same code replaces that scene.",
+        ""
+      );
+
+      if (code === null) {
+        canvas.focus();
+        return;
+      }
+
+      const trimmedCode = code.trim();
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(trimmedCode)) {
+        showBanner("Use 1–64 letters, numbers, dashes, or underscores.", "error");
+        return;
+      }
+
+      try {
+        const statusResponse = await fetch(
+          `/api/scenes/${encodeURIComponent(trimmedCode)}/status`,
+          { cache: "no-store" }
+        );
+        if (!statusResponse.ok) {
+          throw new Error(`Scene-status request failed (${statusResponse.status}).`);
+        }
+
+        const sceneStatus = await statusResponse.json();
+        const codeAlreadyExists = sceneStatus.exists === true;
+
+        if (codeAlreadyExists && !window.confirm(
+          `A scene with the code "${trimmedCode}" already exists. Replace it?`
+        )) {
+          canvas.focus();
+          return;
+        }
+      } catch (error) {
+        showBanner("Could not check whether that scene code already exists.", "error");
+        console.error(error);
+        return;
+      }
+
+      beginSceneSave(trimmedCode);
+    }
+
+    function beginSceneSave(sceneCode) {
+      if (!unityInstance || sceneSaveInProgress) {
+        autosavePending = true;
+        return;
+      }
+
+      sceneSaveInProgress = true;
+      saveSceneButton.disabled = true;
+      if (!savedSceneCode) {
+        saveSceneButton.textContent = "Saving…";
+      }
+      unityInstance.SendMessage("ToolkitWebEditor", "SaveScene", sceneCode);
+    }
+
+    saveSceneButton.onclick = requestSceneSave;
+
+    window.toolkitEditorSavePayload = async payloadJson => {
+      try {
+        const payload = JSON.parse(payloadJson);
+        const images = [];
+
+        for (const image of payload.images || []) {
+          const response = await fetch(image.sourceUrl, { cache: "no-store" });
+          if (!response.ok) {
+            throw new Error(`Could not read ${image.fileName} (${response.status}).`);
+          }
+
+          const blob = await response.blob();
+          images.push({
+            fileName: image.fileName,
+            base64Data: await blobToBase64(blob)
+          });
+        }
+
+        const response = await fetch(
+          `/api/scenes/${encodeURIComponent(payload.sceneId)}/json`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sceneJson: payload.sceneJson, images })
+          }
+        );
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result.error || `Save failed (${response.status}).`);
+        }
+
+        const isFirstSave = !savedSceneCode;
+        savedSceneCode = payload.sceneId;
+        saveSceneButton.textContent = `Saved as: ${savedSceneCode}`;
+        if (isFirstSave) {
+          showBanner(`Scene saved with code: ${payload.sceneId}`, "success");
+        }
+      } catch (error) {
+        showBanner("The scene could not be saved.", "error");
+        saveSceneButton.textContent = savedSceneCode
+          ? `Save failed: ${savedSceneCode}`
+          : "Save Scene · Ctrl+S";
+        console.error(error);
+      } finally {
+        sceneSaveInProgress = false;
+        saveSceneButton.disabled = false;
+        if (savedSceneCode && !saveSceneButton.textContent.startsWith("Save failed")) {
+          saveSceneButton.textContent = `Saved as: ${savedSceneCode}`;
+        }
+        canvas.focus();
+
+        if (autosavePending) {
+          autosavePending = false;
+          scheduleAutosave();
+        }
+      }
+    };
+
+    window.toolkitEditorSceneChanged = () => {
+      if (savedSceneCode) {
+        scheduleAutosave();
+      }
+    };
+
+    function scheduleAutosave() {
+      if (!savedSceneCode) {
+        return;
+      }
+
+      clearTimeout(autosaveTimer);
+      autosaveTimer = setTimeout(() => {
+        autosaveTimer = null;
+        if (sceneSaveInProgress) {
+          autosavePending = true;
+          return;
+        }
+
+        beginSceneSave(savedSceneCode);
+      }, 1500);
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",", 2)[1]);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    window.addEventListener("keydown", event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        requestSceneSave();
+        return;
+      }
+
+      if (!event.ctrlKey && !event.metaKey && !event.altKey &&
+          event.key.toLowerCase() === "q" && !event.repeat) {
+        event.preventDefault();
+        window.location.href = "/";
+        return;
+      }
+
+      if (event.key !== "Enter" || event.repeat || !mediaSessionUrl) {
+        return;
+      }
+
+      event.preventDefault();
+      window.open(mediaSessionUrl, "toolkit-image-upload");
+    });
+
+    window.addEventListener("message", event => {
+      if (event.origin !== window.location.origin ||
+          event.data?.type !== "toolkit-upload-complete") {
+        return;
+      }
+
+      const { sessionId, filename } = event.data;
+      if (sessionId !== activeSessionId || !filename) {
+        return;
+      }
+
+      // This message is only a fast path. Polling the session remains the
+      // source of truth if the browser drops the relationship between tabs.
+      importSessionUpload(sessionId, filename);
+    });
+
+    function startSessionPolling(sessionId) {
+      if (sessionPollTimer) {
+        clearTimeout(sessionPollTimer);
+      }
+
+      pollSessionUploads(sessionId);
+    }
+
+    async function pollSessionUploads(sessionId) {
+      if (sessionId !== activeSessionId) {
+        return;
+      }
+
+      try {
+        const response = await fetch(
+          `/api/session/${encodeURIComponent(sessionId)}/uploads`,
+          { cache: "no-store" }
+        );
+
+        if (!response.ok) {
+          throw new Error(`Upload-list request failed (${response.status}).`);
+        }
+
+        const result = await response.json();
+        // The server historically returned [] before the first upload and
+        // { media: [...] } after one existed, so accept both response shapes.
+        const filenames = Array.isArray(result) ? result : result.media || [];
+
+        for (const filename of filenames) {
+          importSessionUpload(sessionId, filename);
+        }
+      } catch (error) {
+        // A temporary network failure should not end the upload session. The
+        // next poll retries automatically.
+        console.warn("Could not check the upload session.", error);
+      } finally {
+        if (sessionId === activeSessionId) {
+          sessionPollTimer = setTimeout(() => pollSessionUploads(sessionId), 1000);
+        }
+      }
+    }
+
+    function importSessionUpload(sessionId, filename) {
+      if (sessionId !== activeSessionId || !filename || !unityInstance) {
+        return false;
+      }
+
+      const uploadKey = `${sessionId}/${filename}`;
+      if (importedUploads.has(uploadKey)) {
+        return true;
+      }
+
+      const message = JSON.stringify({
+        filename,
+        imageUrl: new URL(
+          `/uploads/${encodeURIComponent(sessionId)}/${encodeURIComponent(filename)}`,
+          window.location.origin
+        ).href
+      });
+
+      unityInstance.SendMessage("ToolkitWebEditor", "AddUploadedImage", message);
+      importedUploads.add(uploadKey);
+      showBanner("Image uploaded. Adding it to the scene…", "warning");
+      return true;
+    }
+
+    window.toolkitViewerSetStatus = (message, current, total) => {
+      overlay.hidden = false;
+      overlay.classList.remove("is-error");
+      status.textContent = message;
+      imageProgress.textContent = total > 0 ? `${current} of ${total}` : "";
+      loadingProgress.style.width = total > 0 ? `${current / total * 100}%` : "100%";
+    };
+
+    window.toolkitViewerSetTitle = title => {
+      sceneTitle.textContent = title;
+      document.title = title;
+    };
+
+    window.toolkitViewerShowReady = failedImageCount => {
+      overlay.hidden = true;
+      if (failedImageCount > 0) {
+        showBanner(`${failedImageCount} image${failedImageCount === 1 ? "" : "s"} could not be loaded.`, "warning");
+      }
+      controls.hidden = false;
+      setTimeout(() => controls.hidden = true, 7000);
+      canvas.focus();
+    };
+
+    window.toolkitViewerShowError = (message, details) => {
+      overlay.hidden = false;
+      overlay.classList.add("is-error");
+      sceneTitle.textContent = "Unable to load scene";
+      status.textContent = message;
+      errorDetails.textContent = details;
+      errorDetails.hidden = !details;
+    };
+
+    function showBanner(message, type) {
+      const notice = document.createElement("div");
+      notice.textContent = message;
+      notice.style.padding = "10px";
+      notice.style.background = type === "error"
+        ? "#b00020"
+        : type === "success" ? "#087f5b" : "#e6b800";
+      notice.style.color = type === "warning" ? "#111" : "#fff";
+      warningBanner.appendChild(notice);
+
+      if (type !== "error") {
+        setTimeout(() => notice.remove(), 5000);
+      }
+    }
+
+    const buildUrl = "Build";
+    const config = {
+      arguments: [],
+      dataUrl: buildUrl + "/{{{ DATA_FILENAME }}}",
+      frameworkUrl: buildUrl + "/{{{ FRAMEWORK_FILENAME }}}",
+      codeUrl: buildUrl + "/{{{ CODE_FILENAME }}}",
+      streamingAssetsUrl: "StreamingAssets",
+      companyName: {{{ JSON.stringify(COMPANY_NAME) }}},
+      productName: {{{ JSON.stringify(PRODUCT_NAME) }}},
+      productVersion: {{{ JSON.stringify(PRODUCT_VERSION) }}},
+      showBanner: showBanner
+    };
+
+    const loaderScript = document.createElement("script");
+    loaderScript.src = buildUrl + "/{{{ LOADER_FILENAME }}}";
+    loaderScript.onload = () => {
+      createUnityInstance(canvas, config, progress => {
+        loadingProgress.style.width = (progress * 100) + "%";
+      }).then(instance => {
+        unityInstance = instance;
+        if (!overlay.classList.contains("is-error")) {
+          status.textContent = "Loading scene…";
+          loadingProgress.style.width = "100%";
+        }
+        canvas.focus();
+      }).catch(message => {
+        window.toolkitViewerShowError("The viewer could not start.", String(message));
+      });
+    };
+    document.body.appendChild(loaderScript);
+  </script>
+</body>
+</html>

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEditor.Build.Reporting;
@@ -6,24 +5,41 @@ using UnityEngine;
 
 public static class ToolkitWebGLBuilder
 {
-    private const string BuildFolder = "Builds/WebGL";
+    private const string ViewerScene = "Assets/Scenes/SampleScene.unity";
+    private const string EditorScene = "Assets/Scenes/ToolkitEditor.unity";
 
     [MenuItem("Toolkit Viewer/Build WebGL")]
-    public static void BuildWebGL()
+    public static void BuildViewerWebGL()
     {
-        List<string> enabledScenes = new List<string>();
+        BuildWebGL(
+            "Toolkit Viewer",
+            ViewerScene,
+            "Builds/WebGL",
+            "PROJECT:ToolkitMinimal"
+        );
+    }
 
-        foreach (EditorBuildSettingsScene scene in EditorBuildSettings.scenes)
-        {
-            if (scene.enabled)
-            {
-                enabledScenes.Add(scene.path);
-            }
-        }
+    [MenuItem("Toolkit Viewer/Build Editor WebGL")]
+    public static void BuildEditorWebGL()
+    {
+        BuildWebGL(
+            "Toolkit Web Editor",
+            EditorScene,
+            "Builds/EditorWebGL",
+            "PROJECT:ToolkitEditor"
+        );
+    }
 
-        if (enabledScenes.Count == 0)
+    private static void BuildWebGL(
+        string productName,
+        string scenePath,
+        string buildFolder,
+        string webGlTemplate
+    )
+    {
+        if (!File.Exists(scenePath))
         {
-            Debug.LogError("WebGL build stopped because no scenes are enabled in Build Profiles.");
+            Debug.LogError(productName + " build stopped because its scene is missing: " + scenePath);
             return;
         }
 
@@ -33,32 +49,32 @@ public static class ToolkitWebGLBuilder
         PlayerSettings.WebGL.decompressionFallback = false;
 
         // Use the project's minimal page instead of Unity's branded desktop frame.
-        PlayerSettings.WebGL.template = "PROJECT:ToolkitMinimal";
+        PlayerSettings.WebGL.template = webGlTemplate;
 
-        Directory.CreateDirectory(BuildFolder);
+        Directory.CreateDirectory(buildFolder);
 
         BuildPlayerOptions buildOptions = new BuildPlayerOptions
         {
-            scenes = enabledScenes.ToArray(),
-            locationPathName = BuildFolder,
+            scenes = new[] { scenePath },
+            locationPathName = buildFolder,
             target = BuildTarget.WebGL,
             options = BuildOptions.None
         };
 
-        Debug.Log("Building Toolkit Viewer WebGL player to: " + Path.GetFullPath(BuildFolder));
+        Debug.Log("Building " + productName + " to: " + Path.GetFullPath(buildFolder));
         BuildReport report = BuildPipeline.BuildPlayer(buildOptions);
 
         if (report.summary.result == BuildResult.Succeeded)
         {
             Debug.Log(
-                "Toolkit Viewer WebGL build succeeded. Size: " +
+                productName + " build succeeded. Size: " +
                 report.summary.totalSize + " bytes."
             );
-            EditorUtility.RevealInFinder(Path.GetFullPath(BuildFolder));
+            EditorUtility.RevealInFinder(Path.GetFullPath(buildFolder));
         }
         else
         {
-            Debug.LogError("Toolkit Viewer WebGL build failed: " + report.summary.result);
+            Debug.LogError(productName + " build failed: " + report.summary.result);
         }
     }
 }

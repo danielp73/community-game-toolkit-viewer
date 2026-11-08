@@ -5,6 +5,14 @@ using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.Networking;
 
+/// <summary>
+/// Turns a published Toolkit scene bundle into live Unity objects.
+///
+/// A bundle consists of a scene.json file plus the images referenced by that
+/// file. The loader chooses the bundle, downloads and parses its JSON, applies
+/// the saved player settings, and creates a SpriteRenderer for every image.
+/// In WebGL builds it also reports progress and errors to the surrounding page.
+/// </summary>
 public class ToolkitSceneLoader : MonoBehaviour
 {
     // Every local or remote scene bundle uses the same JSON filename.
@@ -24,10 +32,17 @@ public class ToolkitSceneLoader : MonoBehaviour
     [Tooltip("Existing scene player. If empty, the loader finds the first KeyboardMove component.")]
     public KeyboardMove player;
 
+    // Parent for everything created from the currently loaded scene. Keeping a
+    // single root makes reloading easy: destroy the old root and build a new one.
     private GameObject loadedSceneRoot;
+
+    // Collected during a load so the web page can report a partial success.
     private int failedImageCount;
 
 #if UNITY_WEBGL && !UNITY_EDITOR
+    // These functions are implemented in ToolkitViewerBridge.jslib. They let
+    // C# update the HTML interface around the Unity canvas. The declarations
+    // are excluded in the Unity Editor because no browser page exists there.
     [DllImport("__Internal")]
     private static extern void ToolkitViewerSetStatus(string message, int current, int total);
 
@@ -43,6 +58,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private void Awake()
     {
+        // Awake runs before Start on every component. Doing this here lets us
+        // pause KeyboardMove before its own Start method initializes movement.
         // Cache the existing scene player before any Start methods run.
         FindPlayerIfNeeded();
 
@@ -56,6 +73,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private void Start()
     {
+        // Starting a coroutine keeps Unity responsive while network requests
+        // wait for JSON and image downloads to complete.
         if (loadOnStart)
         {
             LoadScene();
@@ -72,6 +91,12 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private IEnumerator LoadSceneCoroutine()
     {
+        // Loading happens in five stages:
+        // 1. Choose the JSON URL.
+        // 2. Download and parse scene.json.
+        // 3. Apply the saved player configuration.
+        // 4. Rebuild the scene object's hierarchy.
+        // 5. Tell the surrounding web page that loading has finished.
         // Select either the remote URL or the local StreamingAssets bundle.
         string jsonUrl = GetSceneJsonUrl();
 
@@ -108,6 +133,8 @@ public class ToolkitSceneLoader : MonoBehaviour
                 yield break;
             }
 
+            // JsonUtility maps the JSON fields onto the serializable Toolkit
+            // data classes in Runtime/SceneData.
             ToolkitSceneData sceneData = JsonUtility.FromJson<ToolkitSceneData>(
                 jsonRequest.downloadHandler.text
             );
@@ -141,6 +168,8 @@ public class ToolkitSceneLoader : MonoBehaviour
             // Keep all dynamically created scene objects under one root.
             loadedSceneRoot = new GameObject("Loaded Toolkit Scene - " + sceneData.title);
 
+            // Count first so the HTML loading indicator can show useful
+            // current/total progress during the second pass below.
             int imageCount = 0;
             foreach (ToolkitObjectData objectData in sceneData.objects)
             {
@@ -179,6 +208,9 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private void ApplyPlayerSettings(ToolkitPlayerData playerData)
     {
+        // The player settings are part of the scene protocol, so a published
+        // scene opens at the same position and with the same movement behavior
+        // that it had when exported.
         // Find the player automatically when one was not assigned in the Inspector.
         FindPlayerIfNeeded();
 
@@ -232,6 +264,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private void FindPlayerIfNeeded()
     {
+        // An Inspector reference is preferred. Automatic discovery keeps the
+        // scene working when the field has not been wired manually.
         if (player == null)
         {
             player = FindFirstObjectByType<KeyboardMove>(FindObjectsInactive.Include);
@@ -245,6 +279,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private void EnablePlayer()
     {
+        // This is also called on failure paths so a missing scene never leaves
+        // the viewer controls permanently disabled.
         if (player != null)
         {
             player.enabled = true;
@@ -257,6 +293,8 @@ public class ToolkitSceneLoader : MonoBehaviour
         string cacheToken
     )
     {
+        // For example, if the JSON is /scenes/demo/scene.json and assetUrl is
+        // images/photo.png, Uri resolves it to /scenes/demo/images/photo.png.
         // Resolve relative asset paths against the folder containing scene.json.
         string imageUrl = new Uri(new Uri(jsonUrl), objectData.assetUrl).AbsoluteUri;
         imageUrl = AddCacheToken(imageUrl, cacheToken);
@@ -277,6 +315,8 @@ public class ToolkitSceneLoader : MonoBehaviour
                 yield break;
             }
 
+            // The texture downloader decodes the received PNG/JPEG bytes into
+            // a Texture2D that Unity can place on a sprite.
             Texture2D texture = DownloadHandlerTexture.GetContent(imageRequest);
             texture.name = objectData.assetUrl;
 
@@ -294,6 +334,26 @@ public class ToolkitSceneLoader : MonoBehaviour
 
             SpriteRenderer renderer = imageObject.AddComponent<SpriteRenderer>();
             renderer.sprite = sprite;
+
+            // Use the same two-sided, depth-writing image material as images
+            // uploaded in the web editor. Depth is then resolved per visible
+            // pixel when two image planes cross through each other.
+            Shader imageShader = Resources.Load<Shader>("ToolkitTwoSidedSprite");
+            if (imageShader != null)
+            {
+                Material imageMaterial = new Material(imageShader);
+                imageMaterial.mainTexture = texture;
+                renderer.material = imageMaterial;
+            }
+
+            BoxCollider imageCollider = imageObject.AddComponent<BoxCollider>();
+            imageCollider.size = new Vector3(
+                sprite.bounds.size.x,
+                sprite.bounds.size.y,
+                0.05f
+            );
+            ToolkitEditableImage editableImage = imageObject.AddComponent<ToolkitEditableImage>();
+            editableImage.Initialize(renderer, objectData.objectId, imageUrl);
 
             // Restore the source object's world-space placement.
             imageObject.transform.position = objectData.transform.position;
@@ -318,6 +378,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private static string AddCacheToken(string url, string cacheToken)
     {
+        // Only HTTP(S) resources need cache busting. Local file and platform-
+        // specific URLs are returned unchanged.
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri parsedUrl) ||
             parsedUrl.Scheme != Uri.UriSchemeHttp && parsedUrl.Scheme != Uri.UriSchemeHttps)
         {
@@ -335,6 +397,10 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private string GetSceneJsonUrl()
     {
+        // Priority order:
+        // 1. ?scene=... in the WebGL page URL
+        // 2. remoteSceneUrl from the Inspector
+        // 3. a local StreamingAssets test bundle outside WebGL
         // A public viewer URL such as /viewer/?scene=abc loads the matching
         // scene bundle from the same server and takes priority over Inspector settings.
         string querySceneUrl = GetSceneUrlFromPageQuery();
@@ -371,6 +437,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private static void SetPageStatus(string message, int current, int total)
     {
+        // In the Editor these helpers intentionally do nothing. In a WebGL
+        // player they call the JavaScript functions declared near the top.
 #if UNITY_WEBGL && !UNITY_EDITOR
         ToolkitViewerSetStatus(message, current, total);
 #endif
@@ -399,6 +467,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private static string GetSceneUrlFromPageQuery()
     {
+        // Application.absoluteURL is the address of the page containing the
+        // WebGL build, such as https://example.com/viewer/?scene=my-scene.
         if (string.IsNullOrWhiteSpace(Application.absoluteURL))
         {
             return null;
@@ -428,6 +498,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private static string GetQueryParameter(string query, string requestedName)
     {
+        // Parse only the small piece of query-string behavior needed here,
+        // while correctly decoding escaped names and values.
         string queryWithoutQuestionMark = query.TrimStart('?');
         string[] parameters = queryWithoutQuestionMark.Split('&');
 
@@ -447,6 +519,8 @@ public class ToolkitSceneLoader : MonoBehaviour
 
     private static bool IsSafeSceneId(string sceneId)
     {
+        // The ID becomes part of a URL path. Restricting its characters prevents
+        // values such as "../private" from escaping the public scenes folder.
         if (sceneId.Length == 0 || sceneId.Length > 64)
         {
             return false;
