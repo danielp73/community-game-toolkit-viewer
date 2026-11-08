@@ -1,4 +1,10 @@
 mergeInto(LibraryManager.library, {
+  ToolkitAudioUpdate: function (pointer) {
+    if (window.toolkitAudio) window.toolkitAudio.update(JSON.parse(UTF8ToString(pointer)));
+  },
+  ToolkitAudioRemove: function (pointer) {
+    if (window.toolkitAudio) window.toolkitAudio.remove(UTF8ToString(pointer));
+  },
   ToolkitViewerSetStatus: function (messagePointer, current, total) {
     if (window.toolkitViewerSetStatus) {
       window.toolkitViewerSetStatus(UTF8ToString(messagePointer), current, total);

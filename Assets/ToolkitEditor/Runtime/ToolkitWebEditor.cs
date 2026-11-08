@@ -41,6 +41,7 @@ public class ToolkitWebEditor : MonoBehaviour
         public string sceneId;
         public string sceneJson;
         public List<SaveImageSource> images = new List<SaveImageSource>();
+        public List<SaveImageSource> audio = new List<SaveImageSource>();
     }
 
     [Tooltip("Shared loader used when the editor URL contains ?scene=SCENE_ID.")]
@@ -52,6 +53,11 @@ public class ToolkitWebEditor : MonoBehaviour
     // Uploaded objects are kept separate from objects created by the shared
     // scene loader. This will make later selection and saving logic easier to add.
     private GameObject uploadedImagesRoot;
+    private ToolkitSceneAudio heldSound;
+    private bool heldSoundIsNew;
+    private Vector3 heldSoundOriginalPosition;
+    private bool soundChoiceVisible;
+    private bool soundChoicePlayerEnabled, soundChoiceHorizontalEnabled, soundChoiceVerticalEnabled;
     private ToolkitEditableImage aimedImage;
     private ToolkitEditableImage heldImage;
     private ToolkitEditableImage ignoredPlacedImage;
@@ -101,6 +107,9 @@ public class ToolkitWebEditor : MonoBehaviour
 
     private void Awake()
     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        WebGLInput.captureAllKeyboardInput = false;
+#endif
         // Inspector references are used when assigned; otherwise this searches
         // the copied viewer scene so the prototype does not require manual setup.
         FindSceneReferences();
@@ -135,7 +144,13 @@ public class ToolkitWebEditor : MonoBehaviour
 
     private void Update()
     {
+        if (soundChoiceVisible) return;
         TrackPlayerChanges();
+        if (heldSound != null) {
+            SetComposePrompt("WASD — Move · Mouse — Look · Click — Place sound · Esc — Cancel");
+            if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame) CancelHeldSound();
+            return;
+        }
 
         if (rotationMode)
         {
@@ -197,7 +212,7 @@ public class ToolkitWebEditor : MonoBehaviour
             }
         }
 
-        SetComposePrompt(aimedImage != null ? "Click — Pick up image" : "");
+        SetComposePrompt(FindAimedSound() != null ? "Click — Move sound" : aimedImage != null ? "Click — Pick up image" : "");
 
         if (aimedImage != null && Mouse.current != null &&
             Mouse.current.leftButton.wasPressedThisFrame)
@@ -211,6 +226,7 @@ public class ToolkitWebEditor : MonoBehaviour
         // Player movement and mouse-look both run during Update. Following the
         // camera here avoids carrying the image using the previous frame's view,
         // which otherwise appears as jitter while moving and looking around.
+        if (heldSound != null) heldSound.transform.position = AudioPlacementPosition();
         if (heldImage != null && !rotationMode)
         {
             MoveHeldImage();
@@ -238,6 +254,143 @@ public class ToolkitWebEditor : MonoBehaviour
         // Downloading is asynchronous in Unity, particularly in WebGL. A
         // coroutine lets frames continue rendering while the request is active.
         StartCoroutine(LoadUploadedImage(message));
+    }
+
+    [Serializable]
+    private class AudioMessage
+    {
+        public string objectId;
+        public string sourceUrl;
+        public ToolkitAudioSettings audio;
+    }
+
+    [Preserve]
+    public void AddSceneAudio(string json)
+    {
+        AudioMessage message = JsonUtility.FromJson<AudioMessage>(json);
+        if (message == null || string.IsNullOrEmpty(message.sourceUrl)) return;
+        if (message.audio == null || string.IsNullOrWhiteSpace(message.audio.displayName)) return;
+        string displayName = message.audio.displayName.Trim();
+        if (displayName.Length < 3 || displayName.Length > 40) return;
+        message.audio.displayName = displayName;
+        if (FindObjectsByType<ToolkitSceneAudio>(FindObjectsSortMode.None).Length >= 16) return;
+        ToolkitObjectData data = new ToolkitObjectData {
+            objectId = Guid.NewGuid().ToString("N"), type = "audio",
+            audio = message.audio ?? new ToolkitAudioSettings(),
+            transform = new ToolkitTransformData { position = AudioPlacementPosition(), scale = Vector3.one }
+        };
+        ToolkitSceneAudio sound = ToolkitSceneAudio.Create(null, data, message.sourceUrl, true);
+        if (sound.settings.spatial) BeginHoldingSound(sound, true);
+        else { sound.settings.loop = true; sound.settings.autoplay = true; NotifySceneChanged(); }
+    }
+
+    [Preserve]
+    public void UpdateSceneAudio(string json)
+    {
+        AudioMessage message = JsonUtility.FromJson<AudioMessage>(json);
+        foreach (ToolkitSceneAudio sound in FindObjectsByType<ToolkitSceneAudio>(FindObjectsSortMode.None))
+            if (sound.objectId == message.objectId && message.audio != null) {
+                sound.settings = message.audio;
+                NotifySceneChanged();
+                break;
+            }
+    }
+
+    [Preserve]
+    public void PlaceSceneAudio(string id)
+    {
+        foreach (ToolkitSceneAudio sound in FindObjectsByType<ToolkitSceneAudio>(FindObjectsSortMode.None))
+            if (sound.objectId == id) { BeginHoldingSound(sound, false); break; }
+    }
+
+    [Preserve]
+    public void SetSoundChoiceVisible(string value)
+    {
+        bool visible = value == "1";
+        if (visible == soundChoiceVisible) return;
+        soundChoiceVisible = visible;
+        FindSceneReferences();
+        horizontalLook = player != null ? player.GetComponent<MouseLookHorizontal>() : null;
+        verticalLook = player != null ? player.GetComponentInChildren<MouseLookVertical>(true) : null;
+        if (visible) {
+            soundChoicePlayerEnabled = player != null && player.enabled;
+            soundChoiceHorizontalEnabled = horizontalLook != null && horizontalLook.enabled;
+            soundChoiceVerticalEnabled = verticalLook != null && verticalLook.enabled;
+            if (player != null) player.enabled = false;
+            if (horizontalLook != null) horizontalLook.enabled = false;
+            if (verticalLook != null) verticalLook.enabled = false;
+            Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
+            SetComposePrompt("");
+        } else {
+            if (player != null) player.enabled = soundChoicePlayerEnabled;
+            if (horizontalLook != null) horizontalLook.enabled = soundChoiceHorizontalEnabled;
+            if (verticalLook != null) verticalLook.enabled = soundChoiceVerticalEnabled;
+        }
+    }
+
+    private void BeginHoldingSound(ToolkitSceneAudio sound, bool isNew)
+    {
+        if (heldSound != null) CancelHeldSound();
+        if (heldImage != null) CancelHeldImage();
+        heldSound = sound; heldSoundIsNew = isNew;
+        heldSoundOriginalPosition = sound.transform.position;
+        sound.pendingPlacement = true;
+        sound.transform.position = AudioPlacementPosition();
+    }
+
+    [Preserve]
+    public void HandleSceneAudioClick()
+    {
+        if (soundChoiceVisible || rotationMode || heldImage != null) return;
+        if (heldSound != null) {
+            heldSound.transform.position = AudioPlacementPosition();
+            heldSound.pendingPlacement = false;
+            heldSound = null;
+            SetComposePrompt(""); NotifySceneChanged();
+            return;
+        }
+        ToolkitSceneAudio aimed = FindAimedSound();
+        if (aimed != null) BeginHoldingSound(aimed, false);
+    }
+
+    private ToolkitSceneAudio FindAimedSound()
+    {
+        Camera view = GetPlacementCamera();
+        if (view == null) return null;
+        RaycastHit[] hits = Physics.RaycastAll(view.transform.position, view.transform.forward, 20f);
+        Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+        foreach (RaycastHit hit in hits) {
+            ToolkitSceneAudio sound = hit.collider.GetComponentInParent<ToolkitSceneAudio>();
+            if (sound != null && sound.settings.spatial) return sound;
+            if (hit.collider.GetComponentInParent<ToolkitEditableImage>() != null) return null;
+        }
+        return null;
+    }
+
+    private void CancelHeldSound()
+    {
+        if (heldSoundIsNew) Destroy(heldSound.gameObject);
+        else { heldSound.transform.position = heldSoundOriginalPosition; heldSound.pendingPlacement = false; }
+        heldSound = null; SetComposePrompt("");
+    }
+
+    [Preserve]
+    public void RemoveSceneAudio(string id)
+    {
+        foreach (ToolkitSceneAudio sound in FindObjectsByType<ToolkitSceneAudio>(FindObjectsSortMode.None))
+            if (sound.objectId == id) { Destroy(sound.gameObject); StartCoroutine(NotifyAudioRemoved()); break; }
+    }
+
+    private IEnumerator NotifyAudioRemoved()
+    {
+        yield return null;
+        NotifySceneChanged();
+    }
+
+    private Vector3 AudioPlacementPosition()
+    {
+        Camera view = GetPlacementCamera();
+        return view != null ? view.transform.position + view.transform.forward * 2f : Vector3.zero;
     }
 
     /// <summary>
@@ -300,6 +453,20 @@ public class ToolkitWebEditor : MonoBehaviour
             });
         }
 
+        ToolkitSceneAudio[] sounds = FindObjectsByType<ToolkitSceneAudio>(FindObjectsSortMode.None);
+        for (int i = 0; i < sounds.Length; i++)
+        {
+            ToolkitSceneAudio sound = sounds[i];
+            if (sound == heldSound && heldSoundIsNew) continue;
+            string extension = System.IO.Path.GetExtension(new Uri(sound.sourceUrl).AbsolutePath);
+            string fileName = "sound-" + sound.objectId + extension;
+            sceneData.objects.Add(new ToolkitObjectData {
+                objectId = sound.objectId, type = "audio", assetUrl = "audio/" + fileName,
+                audio = sound.settings,
+                transform = new ToolkitTransformData { position = sound == heldSound ? heldSoundOriginalPosition : sound.transform.position, rotation = Vector3.zero, scale = Vector3.one }
+            });
+            payload.audio.Add(new SaveImageSource { fileName = fileName, sourceUrl = sound.sourceUrl });
+        }
         payload.sceneJson = JsonUtility.ToJson(sceneData, true);
 
 #if UNITY_WEBGL && !UNITY_EDITOR
@@ -307,6 +474,20 @@ public class ToolkitWebEditor : MonoBehaviour
 #else
         Debug.Log(payload.sceneJson);
 #endif
+    }
+
+    // Publishing may rename an older bundle's files. Keep subsequent autosaves
+    // pointed at the committed bundle rather than its now-replaced source paths.
+    [Preserve]
+    public void SceneAudioSaved(string sceneJson)
+    {
+        ToolkitSceneData saved = JsonUtility.FromJson<ToolkitSceneData>(sceneJson);
+        if (saved == null || saved.objects == null) return;
+        foreach (ToolkitSceneAudio sound in FindObjectsByType<ToolkitSceneAudio>(FindObjectsSortMode.None))
+            foreach (ToolkitObjectData data in saved.objects)
+                if (data.type == "audio" && data.objectId == sound.objectId)
+                    sound.sourceUrl = new Uri(new Uri(sound.sourceUrl),
+                        "/scenes/" + saved.sceneId + "/" + data.assetUrl).AbsoluteUri;
     }
 
     private IEnumerator LoadUploadedImage(UploadedImageMessage message)
@@ -527,6 +708,7 @@ public class ToolkitWebEditor : MonoBehaviour
 
         foreach (RaycastHit hit in hits)
         {
+            if (hit.collider.GetComponentInParent<ToolkitSceneAudio>() != null) return null;
             ToolkitEditableImage editableImage = hit.collider.GetComponentInParent<ToolkitEditableImage>();
             if (editableImage != null)
             {

@@ -7,4 +7,5 @@ public class ToolkitObjectData
     public string type;
     public string assetUrl;
     public ToolkitTransformData transform;
+    public ToolkitAudioSettings audio;
 }

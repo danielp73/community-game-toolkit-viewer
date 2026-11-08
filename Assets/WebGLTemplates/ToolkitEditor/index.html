@@ -301,6 +301,7 @@
   <div id="controls" hidden>Click to begin · WASD to move · Mouse to look</div>
   <div id="unity-warning"></div>
 
+  <script src="/scene-audio.js"></script>
   <script>
     const canvas = document.querySelector("#unity-canvas");
     const overlay = document.querySelector("#overlay");
@@ -317,9 +318,11 @@
     const saveSceneButton = document.querySelector("#save-scene");
     const rotationControls = document.querySelector("#rotation-controls");
     let unityInstance = null;
+    window.toolkitAudioSend = (method, message) => unityInstance?.SendMessage("ToolkitWebEditor", method, message);
     let activeSessionId = null;
     let mediaSessionUrl = null;
     let sceneSaveInProgress = false;
+    let sceneSaveErrorNotice = null;
     let savedSceneCode = null;
     let autosaveTimer = null;
     let autosavePending = false;
@@ -489,7 +492,7 @@
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sceneJson: payload.sceneJson, images })
+            body: JSON.stringify({ sceneJson: payload.sceneJson, images, audio: payload.audio || [] })
           }
         );
         const result = await response.json().catch(() => ({}));
@@ -497,6 +500,8 @@
           throw new Error(result.error || `Save failed (${response.status}).`);
         }
 
+        if (sceneSaveErrorNotice) { sceneSaveErrorNotice.remove(); sceneSaveErrorNotice = null; }
+        unityInstance.SendMessage("ToolkitWebEditor", "SceneAudioSaved", payload.sceneJson);
         const isFirstSave = !savedSceneCode;
         savedSceneCode = payload.sceneId;
         saveSceneButton.textContent = `Saved as: ${savedSceneCode}`;
@@ -504,7 +509,8 @@
           showBanner(`Scene saved with code: ${payload.sceneId}`, "success");
         }
       } catch (error) {
-        showBanner("The scene could not be saved.", "error");
+        if (sceneSaveErrorNotice) sceneSaveErrorNotice.remove();
+        sceneSaveErrorNotice = showBanner(error.message || "The scene could not be saved.", "error");
         saveSceneButton.textContent = savedSceneCode
           ? `Save failed: ${savedSceneCode}`
           : "Save Scene · Ctrl+S";
@@ -646,6 +652,15 @@
         return true;
       }
 
+      if (/\.(webm|ogg|mp3|wav|m4a|mp4|aac|flac)$/i.test(filename)) {
+        importedUploads.add(uploadKey);
+        window.toolkitAudio.chooseUpload({
+          sourceUrl: new URL(`/uploads/${encodeURIComponent(sessionId)}/${encodeURIComponent(filename)}`, location.origin).href,
+          filename
+        });
+        return true;
+      }
+      if (!/\.png$/i.test(filename)) return false;
       const message = JSON.stringify({
         filename,
         imageUrl: new URL(
@@ -705,6 +720,7 @@
       if (type !== "error") {
         setTimeout(() => notice.remove(), 5000);
       }
+      return notice;
     }
 
     const buildUrl = "Build";

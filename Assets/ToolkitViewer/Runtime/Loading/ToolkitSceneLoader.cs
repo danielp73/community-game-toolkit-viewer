@@ -185,6 +185,13 @@ public class ToolkitSceneLoader : MonoBehaviour
             // Load supported objects one at a time for this initial implementation.
             foreach (ToolkitObjectData objectData in sceneData.objects)
             {
+                if (objectData.type == "audio")
+                {
+                    string audioUrl = new Uri(new Uri(jsonUrl), objectData.assetUrl).AbsoluteUri;
+                    ToolkitSceneAudio.Create(loadedSceneRoot.transform, objectData, AddCacheToken(audioUrl, cacheToken),
+                        FindFirstObjectByType<ToolkitWebEditor>() != null);
+                    continue;
+                }
                 if (objectData.type != "image")
                 {
                     Debug.LogWarning(
