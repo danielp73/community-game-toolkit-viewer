@@ -473,20 +473,11 @@
     window.toolkitEditorSavePayload = async payloadJson => {
       try {
         const payload = JSON.parse(payloadJson);
-        const images = [];
-
-        for (const image of payload.images || []) {
-          const response = await fetch(image.sourceUrl, { cache: "no-store" });
-          if (!response.ok) {
-            throw new Error(`Could not read ${image.fileName} (${response.status}).`);
-          }
-
-          const blob = await response.blob();
-          images.push({
-            fileName: image.fileName,
-            base64Data: await blobToBase64(blob)
-          });
-        }
+        const imageSources = window.toolkitEditorImageSources ||= new Map();
+        const images = (payload.images || []).map(image => ({
+          fileName: image.fileName,
+          sourceUrl: imageSources.get(image.sourceUrl) || image.sourceUrl
+        }));
 
         const response = await fetch(
           `/api/scenes/${encodeURIComponent(payload.sceneId)}/json`,
@@ -501,6 +492,11 @@
           throw new Error(result.error || `Save failed (${response.status}).`);
         }
 
+        // Follow committed filenames after replacement, including older scene bundles.
+        for (const image of payload.images || []) {
+          imageSources.set(image.sourceUrl,
+            `/scenes/${encodeURIComponent(payload.sceneId)}/images/${encodeURIComponent(image.fileName)}`);
+        }
         if (sceneSaveErrorNotice) { sceneSaveErrorNotice.remove(); sceneSaveErrorNotice = null; }
         unityInstance.SendMessage("ToolkitWebEditor", "SceneAudioSaved", payload.sceneJson);
         const isFirstSave = !savedSceneCode;
